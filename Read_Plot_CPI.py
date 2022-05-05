@@ -3,20 +3,21 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import mplcursors
 import numpy as np
+import gc
 
 
 # define class Field and its attributes
 class Field:
     def __init__(self, field_name):
-        self.field = field_name
+        self.FLD = field_name
 
 
 # define class Well and its attributes
 class Well(Field):
     def __init__(self, well_name, field_name):
         super().__init__(field_name)  # passes field name to Parent class
-        self.NAME = well_name
-        self.START = -999
+        self.WELL = well_name
+        self.STRT = -999
         self.STOP = -999
         self.STEP = -999
         self.NULL = -999
@@ -27,7 +28,27 @@ class Well(Field):
         self.YCOORD = -999
         self.LATI = -999
         self.LONG = -999
+        self.logs_info = {}
         self.logs = pd.DataFrame()
+
+
+# Function to create well
+def create_well(las_file):
+    # read well data
+    well_props, well_logs_info, well_logs_df = read_las(las_file)
+    # create well variable
+    created_well = Well(well_props["WELL"], well_props["FLD"])
+    # assign attributes
+    for a_key in well_props.keys():
+        if a_key != "WELL" and a_key != "FLD":
+            setattr(created_well, a_key, well_props[a_key])
+    # replace na in logs df
+    well_logs_df.replace(created_well.NULL, np.nan, inplace=True)
+    # set index as depth
+    well_logs_df.set_index(keys="DEPTH", inplace=True, drop=True)
+    created_well.logs = well_logs_df
+    created_well.logs_info = well_logs_info
+    return created_well
 
 
 # function to read well attributes and well logs from las file
@@ -36,52 +57,62 @@ def read_las(file_loc):
     well_dict = {}
     with open(file_loc) as las:
         # Boolean used to check start of actual data rather than header
-        start_log_type = False
-        well_attributes = ["START", "STOP", "STEP", "NULL", "DATE", "NAME", "FIELD",
-                           "LONG", "LATI", "XCOORD", "YCOORD", "KB", "GL"]
-        numeric_attributes = ["START", "STOP", "STEP", "NULL", "LONG", "LATI", "XCOORD", "YCOORD", "KB", "GL"]
+        well_attributes = ["WELL NAME", "FIELD", "LAS FILE CREATION DATE",
+                           "START DEPTH", "STOP DEPTH", "STEP VALUE", "NULL VALUE",
+                           "KB ELEVATION", "GL ELEVATION",
+                           "LONGITUDE", "LATITUDE", "X OR EAST-WEST COORDINATE", "Y OR NORTH-SOUTH COORDINATE"]
+        numeric_attributes = well_attributes[3:]
+        start_curve_info = False
         start_log_idx = 0
+        logs_info = {}
         # read all lines in CPI and finds the num at which readings start as well as other important well info
         for num, lines in enumerate(las.readlines(), start=0):
-            # if to find the start the readings start (skips Header)
+            # if to find the start of the log (skips Header)
             if "~A" in lines:
-                Start_log_readings = True
                 start_log_idx = num
                 break
-            # to find well attributes
+            # Find well attributes
             for attribute in well_attributes:
-                if attribute in lines.upper().split():
-                    attribute_value = lines[lines.find(".")+1:lines.find(":")].strip()
+                if attribute == lines.upper().strip().split(":")[-1].strip():
+                    attribute_name = lines[:lines.find(".")].strip()
+                    # corrects for .FT 1000 for example
+                    if len(lines[lines.find(".")+1:lines.find(":")].strip().split())> 1:
+                        attribute_value = lines[lines.find(".") + 1:lines.find(":")].strip().split()[-1]
+                    else:
+                        attribute_value = lines[lines.find(".")+1:lines.find(":")].strip()
                     # for numerical attributes
                     if attribute in numeric_attributes:
                         try:
-                            well_dict[attribute] = float(attribute_value)
+                            well_dict[attribute_name] = float(attribute_value)
                         except ValueError:
-                            # checks if attribute_value can still be split
-                            if len(attribute_value.split())>0:
-                                try:
-                                    float(attribute_value.split()[-1])
-                                    well_dict[attribute] = float(attribute_value.split()[-1])
-                                except ValueError:
-                                    # else append None
-                                    well_dict[attribute] = np.nan
+                            well_dict[attribute_name] = np.nan
                     else:
-                        well_dict[attribute] = attribute_value
+                        well_dict[attribute_name] = attribute_value
+            # Find Curve information
+            if start_curve_info and lines[0] != "#":
+                # corrects for unnamed logs
+                if lines.upper().split()[-1] != ":":
+                    logs_info[lines.upper().split()[0]] = lines.upper().split()[-1]
+                else:
+                    logs_info[lines.upper().split()[0]] = lines.upper().split()[0]
+            # if to find the start of curve information
+            if "~CURVE" in lines:
+                start_curve_info = True
     # Creates well logs names
     with open(file_loc) as las:
         log_names = las.readlines()[start_log_idx].split()[1:]  # [1:] to drop ~A
     # Creates well logs dataframe
     logs_df = pd.read_csv(file_loc, sep="\s+", skiprows=start_log_idx + 1, header=None)
     logs_df.columns = log_names
-    return well_dict, logs_df
+    return well_dict, logs_info, logs_df
 
 
 # calculate petrophysics by depth
 def petrophysics_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
     # corrects top and bottom interval
-    if top_interval == -999 or top_interval < var_well.START:
-        top_interval = var_well.START
-    if bottom_interval == -999 or bottom_interval > var_well.STOP:
+    if top_interval == -999 or top_interval < var_well.STRT or top_interval > var_well.STOP:
+        top_interval = var_well.STRT
+    if bottom_interval == -999 or bottom_interval > var_well.STOP or bottom_interval < var_well.STRT:
         bottom_interval = var_well.STOP
     # Calculates pay properties
     filtered_data = var_well.logs.loc[top_interval:bottom_interval, :]
@@ -98,17 +129,17 @@ def petrophysics_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0)
     res_sw = sum(filtered_data["SW"].to_list()) / len(filtered_data["SW"].to_list())
     final_net_reservoir = net_reservoir * var_well.STEP
     result_df = pd.DataFrame(columns=["WELL", "Type", "Net", "PHIE", "SW"])
-    result_df.loc[0, :] = [var_well.NAME, "Reservoir", final_net_reservoir, round(res_poro, 3), round(res_sw, 3)]
-    result_df.loc[1, :] = [var_well.NAME, "Pay", final_net_pay, round(pay_poro, 3), round(pay_sw, 3)]
+    result_df.loc[0, :] = [var_well.WELL, "Reservoir", final_net_reservoir, round(res_poro, 3), round(res_sw, 3)]
+    result_df.loc[1, :] = [var_well.WELL, "Pay", final_net_pay, round(pay_poro, 3), round(pay_sw, 3)]
     return result_df
 
 
 # Plots CPI by user Depth
 def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth=-999.0):
     # corrects top and bottom interval
-    if required_top_depth == -999 or required_top_depth < var_well.START:
-        required_top_depth = var_well.START
-    if required_bottom_depth == -999 or required_bottom_depth > var_well.STOP:
+    if required_top_depth == -999 or required_top_depth < var_well.STRT or required_top_depth > var_well.STOP:
+        required_top_depth = var_well.STRT
+    if required_bottom_depth == -999 or required_bottom_depth > var_well.STOP or required_bottom_depth < var_well.STRT:
         required_bottom_depth = var_well.STOP
     # prepare logs using log types to be consistent between wells
     logs = var_well.logs.copy()
@@ -120,7 +151,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
             logs[a_var] = np.nan
     # Plot CPI as a figure
     fig = plt.figure()
-    label = var_well.NAME + " CPI"
+    label = var_well.WELL + " CPI"
     fig.suptitle(label)
     # Plot the GR, Bit size & CAL logs
     ax1 = fig.add_subplot(161)
@@ -237,9 +268,9 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
 # Plots petrophysical parameters distribution
 def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
     # corrects top and bottom interval
-    if top_interval == -999 or top_interval < var_well.START:
-        top_interval = var_well.START
-    if bottom_interval == -999 or bottom_interval > var_well.STOP:
+    if top_interval == -999 or top_interval < var_well.STRT or top_interval > var_well.STOP:
+        top_interval = var_well.STRT
+    if bottom_interval == -999 or bottom_interval > var_well.STOP or bottom_interval < var_well.STRT:
         bottom_interval = var_well.STOP
     # Calculates pay properties
     pay_data = var_well.logs.loc[top_interval:bottom_interval, :].copy()
@@ -259,7 +290,7 @@ def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
     ax1.hist(res_data["PHIE"], bins="auto")
     ax1_1 = ax1.twinx()
     ax1_1.hist(res_data["PHIE"], bins="auto", cumulative=1, density=True, histtype='step', color="orange", linewidth=1.5)
-    plt.title("Pay Porosity Distribution")
+    plt.title("Reservoir Porosity Distribution")
     ax1.grid()
     ax2 = plt.subplot(222)
     ax2.hist(pay_data["PHIE"], bins="auto")
@@ -288,26 +319,15 @@ def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
     plt.show()
 
 
-# read well data
-well_props, well_logs_df = read_las("WKAL A-23 CPI.las")
-# create well variable
-my_well = Well(well_props["NAME"], well_props["FIELD"])
-# assign attributes
-for a_key in well_props.keys():
-    if a_key != "NAME" and a_key != "FIELD":
-        setattr(my_well, a_key, well_props[a_key])
-# replace na in logs df
-well_logs_df.replace(my_well.NULL, np.nan, inplace=True)
-# set index as depth
-well_logs_df.set_index(keys="DEPTH", inplace=True, drop=True)
-my_well.logs = well_logs_df
-
+# Create well
+my_well = create_well("BERENICE-1X CPI Rev2.las")
+# print well info
+for well in gc.get_objects():
+    if isinstance(well, Well):
+        print((vars(well)))
 # Calculate Petrophysics by depth
 CPI_summary = petrophysics_by_depth(my_well)
-print(CPI_summary)
-
 # plot CPI
-plot_cpi_by_depth(my_well, 14100, 14300)
-
+plot_cpi_by_depth(my_well)
 # plot Petrophysics Distribution
 plot_dist_by_depth(my_well)
