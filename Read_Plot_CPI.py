@@ -103,16 +103,13 @@ def petrophysics_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0)
     return result_df
 
 
+# Plots CPI by user Depth
 def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth=-999.0):
     # corrects top and bottom interval
     if required_top_depth == -999 or required_top_depth < var_well.START:
         required_top_depth = var_well.START
     if required_bottom_depth == -999 or required_bottom_depth > var_well.STOP:
         required_bottom_depth = var_well.STOP
-        # Plot CPI as a figure
-    fig = plt.figure()
-    label = var_well.NAME + " CPI"
-    fig.suptitle(label)
     # prepare logs using log types to be consistent between wells
     logs = var_well.logs.copy()
     Depth = logs.index
@@ -121,6 +118,10 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     for a_var in plot_vars:
         if a_var not in logs.columns:
             logs[a_var] = np.nan
+    # Plot CPI as a figure
+    fig = plt.figure()
+    label = var_well.NAME + " CPI"
+    fig.suptitle(label)
     # Plot the GR, Bit size & CAL logs
     ax1 = fig.add_subplot(161)
     ax2 = ax1.twiny()
@@ -142,7 +143,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax2.axes.xaxis.set_label_position("bottom")
     ax2.spines["bottom"].set_position(("axes", -0.15))
     # Plot Res Logs
-    ax3 = fig.add_subplot(162)
+    ax3 = fig.add_subplot(162, sharey=ax1)
     ax3.set_xlabel("Res, ohm.m")
     ax3.plot(logs["RDEEP"], Depth, color="red", linewidth=1)
     ax3.plot(logs["RMED"], Depth, color="blue", linewidth=1)
@@ -154,7 +155,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax3.set_xlim([0.1, 1000])
     ax3.semilogx()
     # plot Neutron Density logs
-    ax4 = fig.add_subplot(163)
+    ax4 = fig.add_subplot(163, sharey=ax1)
     ax4.set_xlabel("Neutron")
     ax4.plot(logs["NPHIL"], Depth, color="gray", linewidth=1)
     ax4.set_xlim([0.45, -0.15])
@@ -176,7 +177,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax5.axes.xaxis.set_label_position("bottom")
     ax5.spines["bottom"].set_position(("axes", -0.15))
     # Plot ResFlag and PayFlag
-    ax6 = fig.add_subplot(164)
+    ax6 = fig.add_subplot(164, sharey=ax1)
     ax6.plot(logs["ResFlag"], Depth, color="gray", linewidth=0.1)
     ax6.set_xlim([0, 2])
     ax6.set_xlabel("ResFlag")
@@ -193,7 +194,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax7.axes.xaxis.set_label_position("bottom")
     ax7.spines["bottom"].set_position(("axes", -0.15))
     # plot porosity
-    ax8 = fig.add_subplot(165)
+    ax8 = fig.add_subplot(165, sharey=ax1)
     ax8.set_xlabel("PHIE")
     ax8.plot(logs["PHIE"], Depth, color="black")
     ax8.set_xlim([0.3, 0])
@@ -202,7 +203,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax8.grid()
     ax8.axes.yaxis.set_ticklabels([])
     # plot SW
-    ax9 = fig.add_subplot(166)
+    ax9 = fig.add_subplot(166, sharey=ax1)
     ax9.set_xlabel("SW")
     ax9.plot(logs["SW"], Depth, color="gray", linewidth=0.5)
     ax9.set_xlim([0, 1])
@@ -220,14 +221,70 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     fig.subplots_adjust(top=0.92, wspace=0.2)
 
     # Dynamic hover values
-    c2 = mplcursors.cursor(hover=True)
+    dynamic_cursor = True
+    if dynamic_cursor:
+        c2 = mplcursors.cursor(hover=True)
 
-    # change background color
-    @c2.connect("add")
-    def _(sel):
-        sel.annotation.get_bbox_patch().set(fc="white")
+        # change background color
+        @c2.connect("add")
+        def _(sel):
+            sel.annotation.get_bbox_patch().set(fc="white")
 
     # show plot
+    plt.show()
+
+
+# Plots petrophysical parameters distribution
+def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
+    # corrects top and bottom interval
+    if top_interval == -999 or top_interval < var_well.START:
+        top_interval = var_well.START
+    if bottom_interval == -999 or bottom_interval > var_well.STOP:
+        bottom_interval = var_well.STOP
+    # Calculates pay properties
+    pay_data = var_well.logs.loc[top_interval:bottom_interval, :].copy()
+    pay_data = pay_data[pay_data["PayFlag"] == 1]
+    # calculates reservoir properties
+    res_data = var_well.logs.loc[top_interval:bottom_interval, :].copy()
+    res_data = res_data[res_data["ResFlag"] == 1]
+    # prepare data for plotting
+    plot_vars = ["PHIE", "SW"]
+    for a_var in plot_vars:
+        if a_var not in pay_data.columns:
+            pay_data[a_var] = np.nan
+        if a_var not in res_data.columns:
+            res_data[a_var] = np.nan
+    # plot dist
+    ax1 = plt.subplot(221)
+    ax1.hist(res_data["PHIE"], bins="auto")
+    ax1_1 = ax1.twinx()
+    ax1_1.hist(res_data["PHIE"], bins="auto", cumulative=1, density=True, histtype='step', color="orange", linewidth=1.5)
+    plt.title("Pay Porosity Distribution")
+    ax1.grid()
+    ax2 = plt.subplot(222)
+    ax2.hist(pay_data["PHIE"], bins="auto")
+    ax2_1 = ax2.twinx()
+    ax2_1.hist(pay_data["PHIE"], bins="auto", cumulative=1, density=True, histtype='step', color="orange", linewidth=1.5)
+    plt.title("Pay Porosity Distribution")
+    ax2.grid()
+    ax3 = plt.subplot(223)
+    ax3.hist(res_data["SW"], bins="auto")
+    ax3_1 = ax3.twinx()
+    ax3_1.hist(res_data["SW"], bins="auto", cumulative=1, density=True, histtype='step', color="orange", linewidth=1.5)
+    plt.title("Reservoir Water Saturation Distribution")
+    ax3.grid()
+    ax4 = plt.subplot(224)
+    ax4.hist(pay_data["SW"], bins="auto")
+    ax4_1 = ax4.twinx()
+    ax4_1.hist(pay_data["SW"], bins="auto", cumulative=1, density=True, histtype='step', color="orange", linewidth=1.5)
+    plt.title("Reservoir Water Saturation Distribution")
+    ax4.grid()
+    plt.suptitle("Petrophysical analysis Summary")
+    plt.tight_layout()
+    print("Reservoir Summary")
+    print(res_data[["PHIE", "SW"]].describe())
+    print("Pay Summary")
+    print(pay_data[["PHIE", "SW"]].describe())
     plt.show()
 
 
@@ -244,7 +301,6 @@ well_logs_df.replace(my_well.NULL, np.nan, inplace=True)
 # set index as depth
 well_logs_df.set_index(keys="DEPTH", inplace=True, drop=True)
 my_well.logs = well_logs_df
-print(vars(my_well))
 
 # Calculate Petrophysics by depth
 CPI_summary = petrophysics_by_depth(my_well)
@@ -252,3 +308,6 @@ print(CPI_summary)
 
 # plot CPI
 plot_cpi_by_depth(my_well, 14100, 14300)
+
+# plot Petrophysics Distribution
+plot_dist_by_depth(my_well)
