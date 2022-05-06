@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import mplcursors
 import numpy as np
 import gc
+from pprint import pprint
 
 
 # define class Field and its attributes
@@ -29,7 +30,9 @@ class Well(Field):
         self.LATI = -999
         self.LONG = -999
         self.logs_info = {}
-        self.logs = pd.DataFrame()
+        self.original_logs = pd.DataFrame()
+        self.standard_logs = pd.DataFrame()
+        self.missing_logs = []
 
 
 # Function to create well
@@ -42,12 +45,17 @@ def create_well(las_file):
     for a_key in well_props.keys():
         if a_key != "WELL" and a_key != "FLD":
             setattr(created_well, a_key, well_props[a_key])
+    # correct date
+    created_well.DATE = pd.to_datetime(created_well.DATE)
+    # add well logs information
+    created_well.logs_info = well_logs_info
     # replace na in logs df
     well_logs_df.replace(created_well.NULL, np.nan, inplace=True)
     # set index as depth
     well_logs_df.set_index(keys="DEPTH", inplace=True, drop=True)
-    created_well.logs = well_logs_df
-    created_well.logs_info = well_logs_info
+    # store logs DF
+    created_well.original_logs = well_logs_df
+    created_well.missing_logs, created_well.standard_logs = std_logs(well_logs_info, well_logs_df)
     return created_well
 
 
@@ -92,19 +100,41 @@ def read_las(file_loc):
             if start_curve_info and lines[0] != "#":
                 # corrects for unnamed logs
                 if lines.upper().split()[-1] != ":":
-                    logs_info[lines.upper().split()[0]] = lines.upper().split()[-1]
+                    logs_info[lines.split()[0]] = lines.split()[-1]
                 else:
-                    logs_info[lines.upper().split()[0]] = lines.upper().split()[0]
+                    logs_info[lines.split()[0]] = lines.split()[0]
             # if to find the start of curve information
             if "~CURVE" in lines:
                 start_curve_info = True
-    # Creates well logs names
-    with open(file_loc) as las:
-        log_names = las.readlines()[start_log_idx].split()[1:]  # [1:] to drop ~A
     # Creates well logs dataframe
     logs_df = pd.read_csv(file_loc, sep="\s+", skiprows=start_log_idx + 1, header=None)
-    logs_df.columns = log_names
+    logs_df.columns = logs_info.keys()
     return well_dict, logs_info, logs_df
+
+
+# function to standardize well logs
+def std_logs(logs_info, logs_df):
+    default_logs = {'BS': 'BitSize', 'CAL': 'Caliper', 'GR': 'GammaRay', 'SP': 'SP',
+                    'BADHOLE': 'BADHOLE', 'TEMP': 'Temp',
+                    'Kair': 'Kair', 'Koil': 'Koil', 'Kstress': 'Kstress', 'Kwater': 'Kwater',
+                    'NPHIL': 'Neutron', 'PE': 'PEF', 'RHOB': 'Density', 'DTC': 'Sonic', 'DRHO': 'Correction',
+                    'PayFlag': 'PayFlag', 'ResFlag': 'ResFlag',
+                    'PHIE': 'PHIE', 'PHIT': 'PHIT', 'SW': 'SW', 'BVW': 'BVW',
+                    'RDEEP': 'DeepRes', 'RMICRO': 'MicroRes', 'RSHAL': 'ShalRes', 'RMED': 'MedRes',
+                    'VAnhy': 'VAnhy', 'VCL': 'VCL', 'VCoal': 'VCoal', 'VDCL': 'VDCL', 'VDolo': 'VDolo',
+                    'VLime': 'VLime', 'VSalt': 'VSalt', 'VSand': 'VSand', 'VWCL': 'VWCL', 'VSilt': 'VSilt',
+                    'VSand2': 'VSand2', 'VSilt2': 'VSilt2'}
+    # list of missing logs
+    missing = []
+    # new Dataframe to store standard logs
+    new_logs_df = pd.DataFrame()
+    new_logs_df.index = logs_df.index
+    for key, val in default_logs.items():
+        if val in logs_info.values():
+            new_logs_df[key] = logs_df[list(logs_info.keys())[list(logs_info.values()).index(val)]]
+        else:
+            missing.append(key)
+    return missing, new_logs_df
 
 
 # calculate petrophysics by depth
@@ -115,14 +145,14 @@ def petrophysics_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0)
     if bottom_interval == -999 or bottom_interval > var_well.STOP or bottom_interval < var_well.STRT:
         bottom_interval = var_well.STOP
     # Calculates pay properties
-    filtered_data = var_well.logs.loc[top_interval:bottom_interval, :]
+    filtered_data = var_well.standard_logs.loc[top_interval:bottom_interval, :]
     filtered_data = filtered_data[filtered_data["PayFlag"] == 1]
     net_pay = sum(filtered_data["PayFlag"].to_list())
     pay_poro = sum(filtered_data["PHIE"].to_list()) / len(filtered_data["PHIE"].to_list())
     pay_sw = sum(filtered_data["SW"].to_list()) / len(filtered_data["SW"].to_list())
     final_net_pay = net_pay * var_well.STEP
     # calculates reservoir properties
-    filtered_data = var_well.logs.loc[top_interval:bottom_interval, :]
+    filtered_data = var_well.standard_logs.loc[top_interval:bottom_interval, :]
     filtered_data = filtered_data[filtered_data["ResFlag"] == 1]
     net_reservoir = sum(filtered_data["ResFlag"].to_list())
     res_poro = sum(filtered_data["PHIE"].to_list()) / len(filtered_data["PHIE"].to_list())
@@ -142,7 +172,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     if required_bottom_depth == -999 or required_bottom_depth > var_well.STOP or required_bottom_depth < var_well.STRT:
         required_bottom_depth = var_well.STOP
     # prepare logs using log types to be consistent between wells
-    logs = var_well.logs.copy()
+    logs = var_well.standard_logs.copy()
     Depth = logs.index
     plot_vars = ["GR", "BS", "CAL", "RDEEP", "RMED", "RSHAL", "RMICRO", "NPHIL", "RHOB",
                  "ResFlag", "PayFlag", "PHIE", "SW"]
@@ -182,7 +212,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax3.plot(logs["RMICRO"], Depth, color="black", linewidth=0.7)
     ax3.grid(which='both')  # plots grid
     ax3.set_ylim(required_bottom_depth, required_top_depth)
-    ax3.axes.yaxis.set_ticklabels([])  # Removes Y axis labels
+    plt.setp(ax3.get_yticklabels(), visible=False)  # Hide yaxis
     ax3.set_xlim([0.1, 1000])
     ax3.semilogx()
     # plot Neutron Density logs
@@ -202,7 +232,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax5.grid()  # plots grid
     ax4.grid()  # plots grid
     ax4.set_ylim(required_bottom_depth, required_top_depth)
-    ax4.axes.yaxis.set_ticklabels([])  # Removes Y axis labels
+    plt.setp(ax4.get_yticklabels(), visible=False)  # Hide yaxis
     # moves the 2nd x-axis to bottom of the plot
     ax5.axes.xaxis.set_ticks_position("bottom")
     ax5.axes.xaxis.set_label_position("bottom")
@@ -215,7 +245,7 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax6.fill_betweenx(Depth, 0, logs["ResFlag"], color="yellow")
     ax6.grid(axis="y")  # plots grid
     ax6.set_ylim(required_bottom_depth, required_top_depth)
-    ax6.axes.yaxis.set_ticklabels([])
+    plt.setp(ax6.get_yticklabels(), visible=False)  # Hide yaxis
     ax7 = ax6.twiny()
     ax7.set_xlabel("PayFlag")
     ax7.plot(logs["PayFlag"], Depth, color="gray", linewidth=0.1)
@@ -231,8 +261,8 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax8.set_xlim([0.3, 0])
     ax8.xaxis.set_ticks(np.arange(0.3, -0.05, -0.1))
     ax8.set_ylim(required_bottom_depth, required_top_depth)
+    plt.setp(ax8.get_yticklabels(), visible=False)  # Hide yaxis
     ax8.grid()
-    ax8.axes.yaxis.set_ticklabels([])
     # plot SW
     ax9 = fig.add_subplot(166, sharey=ax1)
     ax9.set_xlabel("SW")
@@ -241,8 +271,8 @@ def plot_cpi_by_depth(var_well, required_top_depth=-999.0, required_bottom_depth
     ax9.xaxis.set_ticks(np.arange(0, 1.1, 0.25))
     ax9.fill_betweenx(Depth, logs["SW"], 1, color="green")
     ax9.set_ylim(required_bottom_depth, required_top_depth)
+    plt.setp(ax9.get_yticklabels(), visible=False)  # Hide yaxis
     ax9.grid()
-    ax9.axes.yaxis.set_ticklabels([])
     # Fine tune and plot figure
     for axis in fig.get_axes():  # loop to get all axis
         axis.xaxis.label.set_fontsize(8)
@@ -273,10 +303,10 @@ def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
     if bottom_interval == -999 or bottom_interval > var_well.STOP or bottom_interval < var_well.STRT:
         bottom_interval = var_well.STOP
     # Calculates pay properties
-    pay_data = var_well.logs.loc[top_interval:bottom_interval, :].copy()
+    pay_data = var_well.standard_logs.loc[top_interval:bottom_interval, :].copy()
     pay_data = pay_data[pay_data["PayFlag"] == 1]
     # calculates reservoir properties
-    res_data = var_well.logs.loc[top_interval:bottom_interval, :].copy()
+    res_data = var_well.standard_logs.loc[top_interval:bottom_interval, :].copy()
     res_data = res_data[res_data["ResFlag"] == 1]
     # prepare data for plotting
     plot_vars = ["PHIE", "SW"]
@@ -320,11 +350,11 @@ def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
 
 
 # Create well
-my_well = create_well("BERENICE-1X CPI Rev2.las")
+my_well = create_well("BERENICE-1X CPI Rev2.las")  # WKAL A-23 CPI.las
 # print well info
 for well in gc.get_objects():
     if isinstance(well, Well):
-        print((vars(well)))
+        pprint(vars(well))
 # Calculate Petrophysics by depth
 CPI_summary = petrophysics_by_depth(my_well)
 # plot CPI
