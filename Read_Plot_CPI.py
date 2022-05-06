@@ -350,14 +350,14 @@ def plot_dist_by_depth(var_well, top_interval=-999.0, bottom_interval=-999.0):
 
 
 # Create well
-my_well = create_well("BERENICE-1X CPI Rev2.las")  # WKAL A-23 CPI.las
+my_well = create_well("Temp_Well.las")
 # print well info
 for well in gc.get_objects():
     if isinstance(well, Well):
         pprint(vars(well))
 # Calculate Petrophysics by depth
-CPI_summary = petrophysics_by_depth(my_well)
+CPI_summary = petrophysics_by_depth(my_well, 14100, 14300)
 # plot CPI
-plot_cpi_by_depth(my_well)
+plot_cpi_by_depth(my_well, 14100, 14300)
 # plot Petrophysics Distribution
-plot_dist_by_depth(my_well)
+plot_dist_by_depth(my_well, 14100, 14300)
