@@ -13,8 +13,8 @@ The project was expanded to cover analytics on all wells in the company (over 25
 2. Standardize log names (e.g. Density as RHOB) for better storage into SQLite and multi-well analysis
 3. Plot CPI (either full well, or using depth limits from user inputs)
 
+![alt_text](https://github.com/Yous3ry/Petrophysical_Analysis_Project/blob/main/CPI_Plot.png)
 
-5. Plot Petrophysical paramters distribution (either full well, or using depth limits from user inputs)
+4. Plot Petrophysical paramters distribution (either full well, or using depth limits from user inputs)
 
-
-
+![alt_text](https://github.com/Yous3ry/Petrophysical_Analysis_Project/blob/main/Distribution_Plot.png)
